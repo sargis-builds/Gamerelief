@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="hy">
 <head>
@@ -26,7 +25,7 @@ canvas#c:active{cursor:grabbing}
 import * as THREE from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 
-/* ═══ 1. Math / noise ═══ */
+/* ═══ 1. Math ═══ */
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>v<a?a:v>b?b:v;
 const lerp=(a,b,t)=>a+(b-a)*t;
@@ -44,10 +43,13 @@ function fbm(x,y,o=4){let a=.5,s=0,f=1;for(let i=0;i<o;i++){s+=a*vnoise(x*f,y*f)
 const ridged=(x,z)=>1-Math.abs(2*fbm(x*0.004+3.1,z*0.004+9.7,4)-1);
 
 /* ═══ 2. Ռելիեֿ ═══ */
-const CAS={z0:260,z1:760,n:5,rise:30.8,half:48};
-const STEPLEN=(CAS.z1-CAS.z0)/CAS.n;      // 100մ ամեն տեռաս
-const STAIR_X0=42, STAIR_X1=48;            // կողքի աստիճանների եզրերը
-const STAIR_W=STAIR_X1-STAIR_X0;           // 6մ լայնություն
+const CAS={z0:260,z1:760,half:48};
+const PLAZA_Z0=260, PLAZA_Z1=420;                 // հրապարակ
+const TERR_Z0=420, TERR_Z1=760;                    // տեռասների գոտի
+const TERR_N=5, TERR_RISE=30.8;                    // 5 տեռաս × 30.8մ = 154մ
+const TERR_DEPTH=(TERR_Z1-TERR_Z0)/TERR_N;         // 68մ ամեն մեկը
+const STAIR_X0=42, STAIR_X1=48;                    // կողքի աստիճաններ
+const STAIR_W=STAIR_X1-STAIR_X0;                   // 6մ լայնք
 
 function mountainH(x,z){
   const f=0.55+0.45*ridged(x,z);
@@ -56,7 +58,7 @@ function mountainH(x,z){
 }
 function cascadeH(x,z){
   const t=(z-CAS.z0)/(CAS.z1-CAS.z0);if(t<=0)return 0;
-  const c=CAS.rise*CAS.n*Math.min(t,1),half=150-25*Math.min(t,1);
+  const c=TERR_RISE*TERR_N*Math.min(t,1),half=150-25*Math.min(t,1);
   return c*(1-sstep(half,half+170,Math.abs(x)))*(1-sstep(CAS.z1,CAS.z1+340,z));
 }
 const GORGE={x:-20,z:-680,a:420,b:110,depth:38};
@@ -75,7 +77,7 @@ function catmull(P,seg){const out=[],g=i=>P[clamp(i,0,P.length-1)];
   out.push(P[P.length-1].slice());return out;}
 const CLP=catmull([[640,0],[760,-90],[860,-260],[840,-520],[700,-720],[420,-830],[60,-870],[-300,-860],[-640,-800],[-900,-620],[-1010,-300],[-1020,60],[-960,420],[-800,700],[-540,830],[-280,840],[-110,790],[-40,768]],12);
 const CLS=[0];for(let i=1;i<CLP.length;i++)CLS.push(CLS[i-1]+Math.hypot(CLP[i][0]-CLP[i-1][0],CLP[i][1]-CLP[i-1][1]));
-const CLL=CLS[CLS.length-1],CLH=CAS.rise*CAS.n+0.4;
+const CLL=CLS[CLS.length-1],CLH=TERR_RISE*TERR_N+0.4;
 function climbAt(x,z){let bd=1e9,bs=0;
   for(let i=0;i<CLP.length-1;i++){const a=CLP[i],b=CLP[i+1],dx=b[0]-a[0],dz=b[1]-a[1],l2=dx*dx+dz*dz;
     const t=clamp(((x-a[0])*dx+(z-a[1])*dz)/l2,0,1),d=Math.hypot(x-a[0]-dx*t,z-a[1]-dz*t);
@@ -87,26 +89,27 @@ function baseH(x,z){
   h+=hillH(x,z);
   return h;}
 function terrainH(x,z){
-  // ✂️ Կասկադի տեռասների տարածքը կտրված՝ հարթ հատակ
+  // ✂️ Կասկադի ամբողջ տարածքը կտրված՝ հարթ հատակ
   if(Math.abs(x)<CAS.half && z>=CAS.z0 && z<=CAS.z1) return 0;
   const hb=baseH(x,z),c=climbAt(x,z),hr=2+(CLH-2)*c[1]/CLL,span=14+Math.max(26,Math.abs(hr-hb)*1.1);
   return c[0]>=span?hb:lerp(hb,hr,1-sstep(14,span,c[0]));}
 
-/* ─ Ֆիզիկա՝ աստիճանների ramp-ը մեքենայի համար ─ */
 let TERR=null;
 function meshH(x,z){const T=TERR;if(!T)return terrainH(x,z);
   const u=(x-T.X0)/T.ST,v=(z-T.Z0)/T.ST;if(u<0||v<0||u>=T.nx-1||v>=T.nz-1)return terrainH(x,z);
   const i=Math.floor(u),j=Math.floor(v),fx=u-i,fz=v-j,h=T.hs,k=j*T.nx+i,ha=h[k],hb=h[k+1],hd=h[k+T.nx],he=h[k+T.nx+1];
   return fx+fz<=1?ha+(hb-ha)*fx+(hd-ha)*fz:he+(hd-he)*(1-fx)+(hb-he)*(1-fz);}
-const CS={x0:51,x1:65,step:0.8,rise:0.25};
 
-/* ⭐ Կողքի աստիճանների ՖԻԶԻԿԱ — սահուն ramp մեքենայի համար */
+/* ⭐ ԱՍՏԻՃԱՆՆԵՐԻ ՖԻԶԻԿԱ — 5 հատված, ամեն մեկը 30.8մ բարձրության */
 function casStairH(x,z){
   const ax=Math.abs(x);
   if(ax<STAIR_X0 || ax>STAIR_X1) return -1e9;
   if(z<CAS.z0 || z>CAS.z1) return -1e9;
-  const t=(z-CAS.z0)/(CAS.z1-CAS.z0);
-  return t*CAS.rise*CAS.n + 0.18;
+  if(z<PLAZA_Z1) return 0.18;                        // հրապարակի գոտում աստիճանները հարթ են
+  const k=Math.floor((z-PLAZA_Z1)/TERR_DEPTH);       // 0..4
+  if(k>=TERR_N) return TERR_RISE*TERR_N+0.18;
+  const t=(z-(PLAZA_Z1+k*TERR_DEPTH))/TERR_DEPTH;
+  return k*TERR_RISE + t*TERR_RISE + 0.18;
 }
 
 const sgrid=new Map(),SC=32,sKey=(gx,gz)=>(gx+512)*1024+(gz+512);
@@ -121,7 +124,7 @@ function solidH(x,z){let h=-1e9;const l=sgrid.get(sKey(Math.floor(x/SC),Math.flo
   return h;}
 const groundH=(x,z)=>Math.max(meshH(x,z)+0.14,solidH(x,z),casStairH(x,z));
 
-/* ═══ 3. Renderer / scene ═══ */
+/* ═══ 3. Renderer ═══ */
 const canvas=document.getElementById('c');
 const renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});
 let pixScale=1;
@@ -162,7 +165,7 @@ const sky=(()=>{
   m.renderOrder=-10;m.frustumCulled=false;scene.add(m);return m;
 })();
 
-/* ═══ 4. Տեքստուրներ և նյութեր ═══ */
+/* ═══ 4. Նյութեր ═══ */
 function mkTex(w,h,fn){
   const c=document.createElement('canvas');c.width=w;c.height=h;
   fn(c.getContext('2d'),w,h);
@@ -217,7 +220,6 @@ const M={
   zebra:new THREE.MeshLambertMaterial({map:mkTex(64,16,(g)=>{g.clearRect(0,0,64,16);g.fillStyle='#f4f4f4';for(let i=0;i<7;i++)g.fillRect(i*9.14+1,0,5,16);}),alphaTest:.5,...OVL(3)}),
   head:lam(0xfff3c4,{emissive:0xb9a36a}),
   terrace:lam(0xe7dcc2),
-  stepTop:lam(0xd5c9ae),
 };
 Object.assign(M,{turq:lam(0x2fb4c4,{emissive:0x0b3d46}),opDome:lam(0x8f949a),tuff:lam(0xd4a96d),tuffDk:lam(0xa97f4b)});
 M.glass=new THREE.MeshPhysicalMaterial({color:0x1e3448,roughness:.08,metalness:.15,envMapIntensity:3,clearcoat:1,clearcoatRoughness:.05,reflectivity:.6});
@@ -560,7 +562,7 @@ function buildFarPeaks(){
   peak(-1800,3100,900,1250,-200,0.3);
 }
 
-/* ═══ 11. Փողոցներ ═══ */
+/* ═══ 11. Փողոցներ (տեսք) ═══ */
 function buildRoads(){
   const R=RING.r;
   for(const e of edges)ribbon([e.a,e.b],RW+2*SW,0.10,M.sidewalk,6,8,12);
@@ -735,56 +737,89 @@ function buildSquare(){
   squareBuilding(135,'tower');squareBuilding(45,'arch');squareBuilding(225,'arch');squareBuilding(315,'arch');
 }
 
-/* ═══ ԿԱՍԿԱԴ + ԿՈՂՔԻ ԱՍՏԻՃԱՆՆԵՐ ═══ */
+/* ═══════════════════════════════════════════════════════════
+   ԿԱՍԿԱԴ — ՀՐԱՊԱՐԱԿ + 5 ՏԵՌԱՍ + ԿՈՂՔԻ ՀԱՏՎԱԾԱՅԻՆ ԱՍՏԻՃԱՆՆԵՐ
+   ═══════════════════════════════════════════════════════════ */
 function buildCascade(){
-  // ─── 5 ՀՍԿԱ ՏԵՌԱՍ (|x| < STAIR_X0) ───
-  for(let k=0;k<CAS.n;k++){
-    const z0=CAS.z0+k*STEPLEN;
-    const top=(k+1)*CAS.rise;
-    const zC=z0+STEPLEN/2;
-    const L=new Loc(0,zC,0,0);
-    // Բետոնե/քարե պատերով տեռաս
-    L.box(0,0,0,STAIR_X0*2,top,STEPLEN,M.terrace);
-    L.solid(0,0,STAIR_X0*2,STEPLEN,top+0.1);
-    // Սալիկապատ գագաթ
-    L.box(0,top-0.08,0,STAIR_X0*2-0.4,0.1,STEPLEN-0.4,M.pave);
-    // Ջրվեժի ջրամբար՝ տեռասի հետևի պատին
-    if(k<CAS.n-1){
-      L.box(0,top+0.05,STEPLEN/2-2,8,0.15,2,M.water);
-    }
-  }
-
-  // ─── ԿՈՂՔԻ ԱՍՏԻՃԱՆՆԵՐ (STAIR_X0 → STAIR_X1) ───
-  // Ֆիզիկայի համար սահուն ramp է (casStairH-ով), տեսողականորեն՝ աստիճաններ
-  const nSteps=250;
-  const stepLen=(CAS.z1-CAS.z0)/nSteps;
-  const stepH=(CAS.rise*CAS.n)/nSteps;
   const T=new Loc(0,0,0,0);
   const xc=(STAIR_X0+STAIR_X1)/2;
+  const stepsPerSeg=50;                          // աստիճանների քանակ ամեն տեռասի համար
 
-  for(let i=0;i<nSteps;i++){
-    const zq=CAS.z0+(i+0.5)*stepLen;
-    const h=(i+1)*stepH;
+  // ── 1. ՀՐԱՊԱՐԱԿ z=260-420, հարթ ──
+  plane(M.pave, 0, (PLAZA_Z0+PLAZA_Z1)/2, CAS.half*2, PLAZA_Z1-PLAZA_Z0, 0, 0.14, 6);
+  addSolid(0, (PLAZA_Z0+PLAZA_Z1)/2, CAS.half, (PLAZA_Z1-PLAZA_Z0)/2, 0, 0.15);
+
+  // ── 2. ՏԵՌԱՍՆԵՐ z=420-760, 5 հատ ──
+  for(let k=0;k<TERR_N;k++){
+    const z0=TERR_Z0+k*TERR_DEPTH;
+    const zC=z0+TERR_DEPTH/2;
+    const top=(k+1)*TERR_RISE;
+    const L=new Loc(0,zC,0,0);
+    // Բետոնե մարմին
+    L.box(0,0,0,STAIR_X0*2,top,TERR_DEPTH,M.terrace);
+    L.solid(0,0,STAIR_X0*2,TERR_DEPTH,top);
+    // Սալիկապատ գագաթ
+    L.box(0,top-0.06,0,STAIR_X0*2-0.4,0.08,TERR_DEPTH-0.4,M.pave);
+    // Հետևի պատի ջրամբար (ջրվեժ)
+    if(k<TERR_N-1){
+      L.box(0,top+0.04,-TERR_DEPTH/2+2,9,0.12,2.5,M.water);
+      L.box(0,top-1.0,-TERR_DEPTH/2-0.5,8,30.8,0.3,M.water);
+    }
+  }
+
+  // ── 3. ԿՈՂՔԻ ԱՍՏԻՃԱՆՆԵՐ |x|=42-48, z=260-760 ──
+  // Հրապարակի գոտում (z=260-420) աստիճանները հարթ են՝ շարունակվում են պարզապես որպես քայլուղի
+  // Ամեն տեռասի գոտում առանձին հատված՝ 30.8մ բարձրության
+  for(let k=0;k<TERR_N;k++){
+    const z0=TERR_Z0+k*TERR_DEPTH;
+    const prevH=k*TERR_RISE;
+    const stepLen=TERR_DEPTH/stepsPerSeg;
+    const stepH=TERR_RISE/stepsPerSeg;
+    for(let i=0;i<stepsPerSeg;i++){
+      const zq=z0+(i+0.5)*stepLen;
+      const h=prevH+(i+1)*stepH;
+      for(const s of[-1,1]){
+        // Աստիճանի մարմին
+        T.box(s*xc, h-stepH, zq, STAIR_W, stepH, stepLen+0.02, M.terrace);
+        // Աստիճանի առջևի մուգ եզրագիծ
+        T.box(s*xc, h-stepH-0.04, zq-stepLen/2, STAIR_W, 0.08, 0.08, M.stoneDk);
+      }
+    }
+    // Անցման կետի «թիթեղ» պատնեշ, որ աստիճանը միանա տեռասին
     for(const s of[-1,1]){
-      // Աստիճանի մարմին
-      T.box(s*xc, h-stepH, zq, STAIR_W, stepH, stepLen+0.02, M.terrace);
-      // Աստիճանի առջևի բարակ մուգ եզր
-      T.box(s*xc, h-stepH-0.03, zq-stepLen/2, STAIR_W, 0.06, 0.1, M.stoneDk);
+      T.box(s*(STAIR_X0-0.2), 0, z0+TERR_DEPTH-0.15, 0.8, prevH+TERR_RISE+0.2, 0.3, M.stoneDk);
     }
   }
 
-  // ─── ԱՐՏԱՔԻՆ ՊԱՏԵՐ (|x| = STAIR_X1)՝ ոչ մի տեղից չընկնես ───
-  // Ոչ մի բարձր պատ, ուղղակի բարակ ցածր barrier
+  // ── 4. Հրապարակի գոտում՝ աստիճանները հարթ հատակ ──
+  // z=260-420, |x|=42-48, բարձրությունը 0
+  plane(M.pave, xc, (PLAZA_Z0+PLAZA_Z1)/2, STAIR_W, PLAZA_Z1-PLAZA_Z0, 0, 0.16, 6);
+  plane(M.pave, -xc, (PLAZA_Z0+PLAZA_Z1)/2, STAIR_W, PLAZA_Z1-PLAZA_Z0, 0, 0.16, 6);
+
+  // ── 5. Կողքի ցածր պատնեշ արտաքին եզրով ──
   for(const s of[-1,1]){
-    for(let i=0;i<nSteps;i+=1){
-      const zq=CAS.z0+(i+0.5)*stepLen;
-      const h=(i+1)*stepH;
-      T.box(s*(STAIR_X1-0.3), h-0.4, zq, 0.6, 0.4, stepLen+0.02, M.stoneDk);
+    for(let k=0;k<TERR_N;k++){
+      const z0=TERR_Z0+k*TERR_DEPTH;
+      const prevH=k*TERR_RISE;
+      for(let i=0;i<stepsPerSeg;i++){
+        const zq=z0+(i+0.5)*(TERR_DEPTH/stepsPerSeg);
+        const h=prevH+(i+1)*(TERR_RISE/stepsPerSeg);
+        T.box(s*(STAIR_X1-0.3), h-0.35, zq, 0.6, 0.35, TERR_DEPTH/stepsPerSeg+0.02, M.stoneDk);
+      }
     }
   }
+
+  // ── 6. Ամեն տեռասի առջևի պատի մուգ երիզ ──
+  for(let k=0;k<TERR_N;k++){
+    const z0=TERR_Z0+k*TERR_DEPTH;
+    const top=(k+1)*TERR_RISE;
+    const prev=0;
+    T.box(0, prev, z0-0.15, STAIR_X0*2, top-prev, 0.3, M.stoneDk);
+  }
+
+  reserved.push({t:0,x:0,z:520,hx:340,hz:290,c:1,s:0});
 }
 
-/* ═══ Landmark մյուսները ═══ */
 function buildOpera(){
   const Y=makeYard({name:'opera',x0:-405,x1:-155,z0:30,z1:214,gate:'W',gpos:125,entry:[-350,125],
     lawns:[[-185,117,60,150],[-290,208,200,10],[-290,41,200,14],[-382,60,38,56]]});
@@ -1004,7 +1039,6 @@ function streetTrees(){
   for(let i=0;i<900;i++){
     const x=rr(-640,640),z=rr(-540,560);
     if(roadDist(x,z)<16)continue;if(Math.hypot(x,z)<150)continue;
-    // Չտնկենք կասկադի տեռասների վրա
     if(Math.abs(x)<CAS.half && z>=CAS.z0 && z<=CAS.z1)continue;
     if(terrainH(x,z)>8)continue;
     addTree(x,z,rr(.9,1.5));
@@ -1054,7 +1088,7 @@ function buildWorld(){
 
 /* ═══ 21. Կամերա ═══ */
 const cam={
-  yaw:0.5, pitch:0.32, dist:800,
+  yaw:0.45, pitch:0.36, dist:900,
   target:new THREE.Vector3(0,50,400),
   drag:false, pid:null, lx:0, ly:0, rmb:false
 };
@@ -1135,4 +1169,4 @@ function start(){
 setTimeout(start,30);
 </script>
 </body>
-</html>
+  </html>
