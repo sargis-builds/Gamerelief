@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Երևան · Քաղաք + Կասկադ</title>
+<title>Երևան · Քաղաք</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden;background:#9cc3e6;font-family:"Segoe UI",system-ui,sans-serif;touch-action:none}
@@ -18,14 +18,14 @@ canvas#c:active{cursor:grabbing}
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="info">Ձախ drag՝ պտտել · Աջ drag՝ տեղափոխել · Scroll՝ մոտեցնել</div>
+<div id="info">Քաշիր՝ պտտելու · Scroll՝ մոտեցնելու · Աջ կոճակ՝ տեղափոխելու</div>
 <div id="loading">Բեռնվում է Երևանը…</div>
 
 <script type="module">
 import * as THREE from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 
-/* ═══ 1. Math ═══ */
+/* ═══ 1. Math / noise ═══ */
 const TAU=Math.PI*2;
 const clamp=(v,a,b)=>v<a?a:v>b?b:v;
 const lerp=(a,b,t)=>a+(b-a)*t;
@@ -42,15 +42,8 @@ function vnoise(x,y){
 function fbm(x,y,o=4){let a=.5,s=0,f=1;for(let i=0;i<o;i++){s+=a*vnoise(x*f,y*f);f*=2;a*=.5;}return s/(1-Math.pow(.5,o));}
 const ridged=(x,z)=>1-Math.abs(2*fbm(x*0.004+3.1,z*0.004+9.7,4)-1);
 
-/* ═══ 2. Ռելիեֿ ═══ */
-const CAS={z0:260,z1:760,half:48};
-const PLAZA_Z0=260, PLAZA_Z1=420;                 // հրապարակ
-const TERR_Z0=420, TERR_Z1=760;                    // տեռասների գոտի
-const TERR_N=5, TERR_RISE=30.8;                    // 5 տեռաս × 30.8մ = 154մ
-const TERR_DEPTH=(TERR_Z1-TERR_Z0)/TERR_N;         // 68մ ամեն մեկը
-const STAIR_X0=42, STAIR_X1=48;                    // կողքի աստիճաններ
-const STAIR_W=STAIR_X1-STAIR_X0;                   // 6մ լայնք
-
+/* ═══ 2. Ռելիեֆ ═══ */
+const CAS={z0:260,z1:760,n:7,rise:22,half:48};
 function mountainH(x,z){
   const f=0.55+0.45*ridged(x,z);
   const N=sstep(600,1500,z)*60*1.9,S=sstep(500,1300,-z)*60*0.35,E=sstep(600,1400,x)*60*0.95,W=sstep(600,1400,-x)*60*1.15;
@@ -58,7 +51,7 @@ function mountainH(x,z){
 }
 function cascadeH(x,z){
   const t=(z-CAS.z0)/(CAS.z1-CAS.z0);if(t<=0)return 0;
-  const c=TERR_RISE*TERR_N*Math.min(t,1),half=150-25*Math.min(t,1);
+  const c=CAS.rise*CAS.n*Math.min(t,1),half=150-25*Math.min(t,1);
   return c*(1-sstep(half,half+170,Math.abs(x)))*(1-sstep(CAS.z1,CAS.z1+340,z));
 }
 const GORGE={x:-20,z:-680,a:420,b:110,depth:38};
@@ -77,7 +70,7 @@ function catmull(P,seg){const out=[],g=i=>P[clamp(i,0,P.length-1)];
   out.push(P[P.length-1].slice());return out;}
 const CLP=catmull([[640,0],[760,-90],[860,-260],[840,-520],[700,-720],[420,-830],[60,-870],[-300,-860],[-640,-800],[-900,-620],[-1010,-300],[-1020,60],[-960,420],[-800,700],[-540,830],[-280,840],[-110,790],[-40,768]],12);
 const CLS=[0];for(let i=1;i<CLP.length;i++)CLS.push(CLS[i-1]+Math.hypot(CLP[i][0]-CLP[i-1][0],CLP[i][1]-CLP[i-1][1]));
-const CLL=CLS[CLS.length-1],CLH=TERR_RISE*TERR_N+0.4;
+const CLL=CLS[CLS.length-1],CLH=CAS.rise*CAS.n+0.4;
 function climbAt(x,z){let bd=1e9,bs=0;
   for(let i=0;i<CLP.length-1;i++){const a=CLP[i],b=CLP[i+1],dx=b[0]-a[0],dz=b[1]-a[1],l2=dx*dx+dz*dz;
     const t=clamp(((x-a[0])*dx+(z-a[1])*dz)/l2,0,1),d=Math.hypot(x-a[0]-dx*t,z-a[1]-dz*t);
@@ -89,29 +82,19 @@ function baseH(x,z){
   h+=hillH(x,z);
   return h;}
 function terrainH(x,z){
-  // ✂️ Կասկադի ամբողջ տարածքը կտրված՝ հարթ հատակ
+  // ✂️ Կասկադի տեղը կտրած հարթ
   if(Math.abs(x)<CAS.half && z>=CAS.z0 && z<=CAS.z1) return 0;
   const hb=baseH(x,z),c=climbAt(x,z),hr=2+(CLH-2)*c[1]/CLL,span=14+Math.max(26,Math.abs(hr-hb)*1.1);
   return c[0]>=span?hb:lerp(hb,hr,1-sstep(14,span,c[0]));}
 
+/* ─ Ֆիզիկական մակերևույթներ (շենքերի collider-ների համար) ─ */
 let TERR=null;
 function meshH(x,z){const T=TERR;if(!T)return terrainH(x,z);
   const u=(x-T.X0)/T.ST,v=(z-T.Z0)/T.ST;if(u<0||v<0||u>=T.nx-1||v>=T.nz-1)return terrainH(x,z);
   const i=Math.floor(u),j=Math.floor(v),fx=u-i,fz=v-j,h=T.hs,k=j*T.nx+i,ha=h[k],hb=h[k+1],hd=h[k+T.nx],he=h[k+T.nx+1];
   return fx+fz<=1?ha+(hb-ha)*fx+(hd-ha)*fz:he+(hd-he)*(1-fx)+(hb-he)*(1-fz);}
-
-/* ⭐ ԱՍՏԻՃԱՆՆԵՐԻ ՖԻԶԻԿԱ — 5 հատված, ամեն մեկը 30.8մ բարձրության */
-function casStairH(x,z){
-  const ax=Math.abs(x);
-  if(ax<STAIR_X0 || ax>STAIR_X1) return -1e9;
-  if(z<CAS.z0 || z>CAS.z1) return -1e9;
-  if(z<PLAZA_Z1) return 0.18;                        // հրապարակի գոտում աստիճանները հարթ են
-  const k=Math.floor((z-PLAZA_Z1)/TERR_DEPTH);       // 0..4
-  if(k>=TERR_N) return TERR_RISE*TERR_N+0.18;
-  const t=(z-(PLAZA_Z1+k*TERR_DEPTH))/TERR_DEPTH;
-  return k*TERR_RISE + t*TERR_RISE + 0.18;
-}
-
+const CS={x0:51,x1:65,step:0.8,rise:0.25};
+function casStairH(x,z){return -1e9;}
 const sgrid=new Map(),SC=32,sKey=(gx,gz)=>(gx+512)*1024+(gz+512);
 function addSolid(x,z,hx,hz,yaw,top){
   const s={x,z,hx,hz,c:Math.cos(yaw),s:Math.sin(yaw),top},ex=hx*Math.abs(s.c)+hz*Math.abs(s.s),ez=hx*Math.abs(s.s)+hz*Math.abs(s.c);
@@ -124,7 +107,7 @@ function solidH(x,z){let h=-1e9;const l=sgrid.get(sKey(Math.floor(x/SC),Math.flo
   return h;}
 const groundH=(x,z)=>Math.max(meshH(x,z)+0.14,solidH(x,z),casStairH(x,z));
 
-/* ═══ 3. Renderer ═══ */
+/* ═══ 3. Renderer / scene ═══ */
 const canvas=document.getElementById('c');
 const renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});
 let pixScale=1;
@@ -165,7 +148,7 @@ const sky=(()=>{
   m.renderOrder=-10;m.frustumCulled=false;scene.add(m);return m;
 })();
 
-/* ═══ 4. Նյութեր ═══ */
+/* ═══ 4. Տեքստուրներ և նյութեր ═══ */
 function mkTex(w,h,fn){
   const c=document.createElement('canvas');c.width=w;c.height=h;
   fn(c.getContext('2d'),w,h);
@@ -219,7 +202,6 @@ const M={
   dash:new THREE.MeshLambertMaterial({map:mkTex(16,64,(g)=>{g.clearRect(0,0,16,64);g.fillStyle='#f2c200';g.fillRect(0,0,16,28);}),alphaTest:.5,...OVL(3)}),
   zebra:new THREE.MeshLambertMaterial({map:mkTex(64,16,(g)=>{g.clearRect(0,0,64,16);g.fillStyle='#f4f4f4';for(let i=0;i<7;i++)g.fillRect(i*9.14+1,0,5,16);}),alphaTest:.5,...OVL(3)}),
   head:lam(0xfff3c4,{emissive:0xb9a36a}),
-  terrace:lam(0xe7dcc2),
 };
 Object.assign(M,{turq:lam(0x2fb4c4,{emissive:0x0b3d46}),opDome:lam(0x8f949a),tuff:lam(0xd4a96d),tuffDk:lam(0xa97f4b)});
 M.glass=new THREE.MeshPhysicalMaterial({color:0x1e3448,roughness:.08,metalness:.15,envMapIntensity:3,clearcoat:1,clearcoatRoughness:.05,reflectivity:.6});
@@ -269,7 +251,7 @@ function facadeGeo(w,h,d,cw,ch){
   return g;
 }
 
-/* ═══ 6. Collision ═══ */
+/* ═══ 6. Collision (շենքերի համընկնումների ստուգման համար) ═══ */
 function obbOverlap(a,b){
   const ax=[[a.c,-a.s],[a.s,a.c],[b.c,-b.s],[b.s,b.c]];
   for(const [nx,nz] of ax){
@@ -325,7 +307,7 @@ function nearestRoadPoint(x,z){
 }
 const yards=[],reserved=[],landmarkBuildings=[];
 
-/* ═══ 8. Երկրաչափություն ═══ */
+/* ═══ 8. Երկրաչափության օգնականներ ═══ */
 function conform(g,yOff,tile){
   const p=g.attributes.position,uv=g.attributes.uv;
   for(let i=0;i<p.count;i++){
@@ -472,7 +454,7 @@ class Loc{
   sbox(lx,y0,lz,w,h,d,mat){this.box(lx,y0,lz,w,h,d,mat);this.solid(lx,lz,w,d,y0+h);}
 }
 
-/* ═══ 8.5 Տանիք ═══ */
+/* ═══ 8.5 Տանիքի դետալներ ═══ */
 function addRoofClutter(L,w,h,d,y0,seed){
   const rng2=mulberry(seed||Math.floor(L.x*1000+L.z*1000));
   const r=()=>rng2();
@@ -510,7 +492,7 @@ function finalizeTrees(){
   c0.count=t0.length;c1.count=t1.length;
 }
 
-/* ═══ 10. Տեռեյն ═══ */
+/* ═══ 10. Տեռեյնի մեշ ═══ */
 const GC=new THREE.Color(0x2d5a2f);
 function buildTerrain(){
   const X0=-1500,X1=1500,Z0=-1200,Z1=1500,ST=10;
@@ -562,7 +544,7 @@ function buildFarPeaks(){
   peak(-1800,3100,900,1250,-200,0.3);
 }
 
-/* ═══ 11. Փողոցներ (տեսք) ═══ */
+/* ═══ 11. Փողոցներ ═══ */
 function buildRoads(){
   const R=RING.r;
   for(const e of edges)ribbon([e.a,e.b],RW+2*SW,0.10,M.sidewalk,6,8,12);
@@ -688,7 +670,19 @@ function pond(x,z,r){
 }
 
 /* ═══ 13. Landmark-ներ ═══ */
-const AVE={a:[156,58],b:[385,262]};
+const LM=[
+  {id:'square',name:'Հանրապետության հրապարակ',t:[-74.2,-74.2]},
+  {id:'cascade',name:'Կասկադ',t:[0,236]},
+  {id:'opera',name:'Օպերայի շենք',t:[-440,130]},
+  {id:'mat',name:'Մատենադարան',t:[-500,228]},
+  {id:'gallery',name:'Ազգային պատկերասրահ',t:[-300,0]},
+  {id:'marriott',name:'Marriott Hotel',t:[-100,-260]},
+  {id:'uni',name:'Երևանի պետական համալսարան',t:[400,-260]},
+  {id:'north',name:'Հյուսիսային պողոտա',t:[150,34]},
+  {id:'mosque',name:'Կապույտ մզկիթ',t:[500,0]},
+  {id:'church',name:'Սբ. Գրիգոր Լուսավորիչ եկեղեցի',t:[420,-150]},
+];
+const jets=[];
 
 function clockTex(){
   return mkTex(128,128,(g)=>{
@@ -733,92 +727,18 @@ function buildSquare(){
   F.cyl(0,-0.6,0,24,1.8,M.stone,40);F.cyl(0,-0.6,0,22.6,2.05,M.water,40);
   F.cyl(0,0,0,4.5,6,M.stone,16);F.cyl(0,5,0,9,0.9,M.stone,24);F.cyl(0,5.5,0,8.1,0.5,M.water,24);
   F.cyl(0,6,0,1.5,3,M.stone,10);
+  const jm=new THREE.MeshBasicMaterial({color:0xeaf6ff,transparent:true,opacity:.55,depthWrite:false});
+  const jg=new THREE.ConeGeometry(0.6,1,6);jg.translate(0,0.5,0);
+  for(let i=0;i<17;i++){
+    const a=i<16?i/16*TAU:0,rad=i<16?15:0;
+    const m=new THREE.Mesh(jg,jm);m.position.set(Math.cos(a)*rad,terrainH(0,0)+1.4,Math.sin(a)*rad);
+    m.userData={ph:rng()*6,h:i<16?5+rng()*3:15};scene.add(m);jets.push(m);
+  }
   for(let i=0;i<16;i++){const a=i/16*TAU+0.2;lamp(Math.cos(a)*88,Math.sin(a)*88);}
   squareBuilding(135,'tower');squareBuilding(45,'arch');squareBuilding(225,'arch');squareBuilding(315,'arch');
 }
-
-/* ═══════════════════════════════════════════════════════════
-   ԿԱՍԿԱԴ — ՀՐԱՊԱՐԱԿ + 5 ՏԵՌԱՍ + ԿՈՂՔԻ ՀԱՏՎԱԾԱՅԻՆ ԱՍՏԻՃԱՆՆԵՐ
-   ═══════════════════════════════════════════════════════════ */
-function buildCascade(){
-  const T=new Loc(0,0,0,0);
-  const xc=(STAIR_X0+STAIR_X1)/2;
-  const stepsPerSeg=50;                          // աստիճանների քանակ ամեն տեռասի համար
-
-  // ── 1. ՀՐԱՊԱՐԱԿ z=260-420, հարթ ──
-  plane(M.pave, 0, (PLAZA_Z0+PLAZA_Z1)/2, CAS.half*2, PLAZA_Z1-PLAZA_Z0, 0, 0.14, 6);
-  addSolid(0, (PLAZA_Z0+PLAZA_Z1)/2, CAS.half, (PLAZA_Z1-PLAZA_Z0)/2, 0, 0.15);
-
-  // ── 2. ՏԵՌԱՍՆԵՐ z=420-760, 5 հատ ──
-  for(let k=0;k<TERR_N;k++){
-    const z0=TERR_Z0+k*TERR_DEPTH;
-    const zC=z0+TERR_DEPTH/2;
-    const top=(k+1)*TERR_RISE;
-    const L=new Loc(0,zC,0,0);
-    // Բետոնե մարմին
-    L.box(0,0,0,STAIR_X0*2,top,TERR_DEPTH,M.terrace);
-    L.solid(0,0,STAIR_X0*2,TERR_DEPTH,top);
-    // Սալիկապատ գագաթ
-    L.box(0,top-0.06,0,STAIR_X0*2-0.4,0.08,TERR_DEPTH-0.4,M.pave);
-    // Հետևի պատի ջրամբար (ջրվեժ)
-    if(k<TERR_N-1){
-      L.box(0,top+0.04,-TERR_DEPTH/2+2,9,0.12,2.5,M.water);
-      L.box(0,top-1.0,-TERR_DEPTH/2-0.5,8,30.8,0.3,M.water);
-    }
-  }
-
-  // ── 3. ԿՈՂՔԻ ԱՍՏԻՃԱՆՆԵՐ |x|=42-48, z=260-760 ──
-  // Հրապարակի գոտում (z=260-420) աստիճանները հարթ են՝ շարունակվում են պարզապես որպես քայլուղի
-  // Ամեն տեռասի գոտում առանձին հատված՝ 30.8մ բարձրության
-  for(let k=0;k<TERR_N;k++){
-    const z0=TERR_Z0+k*TERR_DEPTH;
-    const prevH=k*TERR_RISE;
-    const stepLen=TERR_DEPTH/stepsPerSeg;
-    const stepH=TERR_RISE/stepsPerSeg;
-    for(let i=0;i<stepsPerSeg;i++){
-      const zq=z0+(i+0.5)*stepLen;
-      const h=prevH+(i+1)*stepH;
-      for(const s of[-1,1]){
-        // Աստիճանի մարմին
-        T.box(s*xc, h-stepH, zq, STAIR_W, stepH, stepLen+0.02, M.terrace);
-        // Աստիճանի առջևի մուգ եզրագիծ
-        T.box(s*xc, h-stepH-0.04, zq-stepLen/2, STAIR_W, 0.08, 0.08, M.stoneDk);
-      }
-    }
-    // Անցման կետի «թիթեղ» պատնեշ, որ աստիճանը միանա տեռասին
-    for(const s of[-1,1]){
-      T.box(s*(STAIR_X0-0.2), 0, z0+TERR_DEPTH-0.15, 0.8, prevH+TERR_RISE+0.2, 0.3, M.stoneDk);
-    }
-  }
-
-  // ── 4. Հրապարակի գոտում՝ աստիճանները հարթ հատակ ──
-  // z=260-420, |x|=42-48, բարձրությունը 0
-  plane(M.pave, xc, (PLAZA_Z0+PLAZA_Z1)/2, STAIR_W, PLAZA_Z1-PLAZA_Z0, 0, 0.16, 6);
-  plane(M.pave, -xc, (PLAZA_Z0+PLAZA_Z1)/2, STAIR_W, PLAZA_Z1-PLAZA_Z0, 0, 0.16, 6);
-
-  // ── 5. Կողքի ցածր պատնեշ արտաքին եզրով ──
-  for(const s of[-1,1]){
-    for(let k=0;k<TERR_N;k++){
-      const z0=TERR_Z0+k*TERR_DEPTH;
-      const prevH=k*TERR_RISE;
-      for(let i=0;i<stepsPerSeg;i++){
-        const zq=z0+(i+0.5)*(TERR_DEPTH/stepsPerSeg);
-        const h=prevH+(i+1)*(TERR_RISE/stepsPerSeg);
-        T.box(s*(STAIR_X1-0.3), h-0.35, zq, 0.6, 0.35, TERR_DEPTH/stepsPerSeg+0.02, M.stoneDk);
-      }
-    }
-  }
-
-  // ── 6. Ամեն տեռասի առջևի պատի մուգ երիզ ──
-  for(let k=0;k<TERR_N;k++){
-    const z0=TERR_Z0+k*TERR_DEPTH;
-    const top=(k+1)*TERR_RISE;
-    const prev=0;
-    T.box(0, prev, z0-0.15, STAIR_X0*2, top-prev, 0.3, M.stoneDk);
-  }
-
-  reserved.push({t:0,x:0,z:520,hx:340,hz:290,c:1,s:0});
-}
+/* — Կասկադ — ✂️ դատարկ — */
+function buildCascade(){}
 
 function buildOpera(){
   const Y=makeYard({name:'opera',x0:-405,x1:-155,z0:30,z1:214,gate:'W',gpos:125,entry:[-350,125],
@@ -836,10 +756,12 @@ function buildOpera(){
   for(let i=0;i<8;i++)L.col(-17.5+i*5,0.5,pz,1.05,14.5,M.stone);
   L.box(0,15,pz,42,2,9,M.stone);L.ped(0,17,pz,42,6.5,9,M.stone);L.box(0,0.5,pz-1,43,0.8,10,M.stoneDk);
   for(let j=0;j<6;j++)L.sbox(0,-0.2,pz+5.4+j*1.4,48,0.5+(5-j)*0.28,1.4,M.stone);
+  for(let x0=-a+8;x0<=a-8;x0+=7){let r=1e9;for(let k=0;k<72;k++){const t=k/72*TAU;r=Math.min(r,Math.hypot(a*Math.cos(t)-x0,b*Math.sin(t)));}}
   const wp=L.w(0,0);landmarkBuildings.push({name:'opera',x:wp[0],z:wp[1],hx:a,hz:b,c:L.c,s:L.s,ell:true});
   pond(-188,100,14);
   Y.plant({scatter:34,step:14});
 }
+
 function buildMatenadaran(){
   const Y=makeYard({name:'mat',x0:-600,x1:-400,z0:250,z1:420,gate:'S',gpos:-500,entry:[-500,287],
     lawns:[[-545,360,70,100],[-455,360,70,100],[-500,405,150,22]]});
@@ -854,9 +776,11 @@ function buildMatenadaran(){
   L.box(0,22.8,26,78,3,7,M.stone);L.ped(0,25.8,26,78,9,7,M.stone);
   L.box(0,0.8,22,80,0.9,10,M.stoneDk);
   for(let j=0;j<12;j++)L.sbox(0,-0.2,32+j*1.5,72,0.5+(11-j)*0.3,1.5,M.stone);
+  for(const s of[-1,1]){L.box(s*46,-0.2,40,3.4,18,3.4,M.stone);L.cone(s*46,17.8,40,2.4,5,M.stone);}
   const wp=L.w(0,0);landmarkBuildings.push({name:'mat',x:wp[0],z:wp[1],hx:57,hz:27,c:L.c,s:L.s});
   Y.plant({scatter:30,step:15});
 }
+
 function buildGallery(){
   const Y=makeYard({name:'gallery',x0:-415,x1:-185,z0:-190,z1:-20,gate:'N',gpos:-300,entry:[-300,-57],
     lawns:[[-380,-110,50,100],[-220,-110,50,100],[-300,-175,160,22]]});
@@ -872,6 +796,7 @@ function buildGallery(){
   landmarkBuildings.push({name:'gallery',x:-300,z:-100,hx:48,hz:38,c:1,s:0});
   Y.plant({scatter:26,step:15});
 }
+
 function buildMarriott(){
   const Y=makeYard({name:'marriott',x0:-230,x1:30,z0:-500,z1:-300,gate:'N',gpos:-100,entry:[-100,-348],
     lawns:[[-190,-340,70,70],[-10,-340,60,70],[-100,-480,220,30],[-195,-420,60,80],[-5,-420,50,80]]});
@@ -887,6 +812,7 @@ function buildMarriott(){
   landmarkBuildings.push({name:'marriott',x:-100,z:-400,hx:61,hz:41,c:1,s:0});
   Y.plant({scatter:30,step:15});
 }
+
 function buildUniversity(){
   const Y=makeYard({name:'uni',x0:250,x1:550,z0:-455,z1:-285,gate:'N',gpos:400,entry:[400,-298],
     lawns:[[300,-350,90,110],[500,-350,90,110],[400,-435,260,30],[400,-385,120,10]]});
@@ -902,6 +828,8 @@ function buildUniversity(){
   landmarkBuildings.push({name:'uni',x:400,z:-350,hx:82,hz:42,c:1,s:0});
   Y.plant({scatter:30,step:15});
 }
+
+const AVE={a:[156,58],b:[385,262]};
 function buildAvenue(){
   const dx=AVE.b[0]-AVE.a[0],dz=AVE.b[1]-AVE.a[1],len=Math.hypot(dx,dz),ux=dx/len,uz=dz/len,nx=-uz,nz=ux;
   const yaw=Math.atan2(ux,uz),mid=[(AVE.a[0]+AVE.b[0])/2,(AVE.a[1]+AVE.b[1])/2],rot=Math.atan2(-dz,dx);
@@ -931,6 +859,7 @@ function buildAvenue(){
   }
   const E=new Loc(AVE.b[0],AVE.b[1],0);E.cyl(0,-0.4,0,6,1.2,M.stone,24);E.cyl(0,0.2,0,5.2,1.2,M.water,24);
 }
+
 function buildClimb(){
   const P=CLP.filter(p=>!(Math.abs(p[0])<60 && p[1]>CAS.z0 && p[1]<CAS.z1));
   if(P.length<2)return;
@@ -939,6 +868,7 @@ function buildClimb(){
     const L=new Loc((a[0]+b[0])/2,(a[1]+b[1])/2,Math.atan2(dx,dz));
     for(const sg of[-1,1])L.box(sg*7.6,-0.4,0,0.7,1.5,l+0.4,M.stone);}
 }
+
 function buildMosque(){
   const Y=makeYard({name:'mosque',x0:440,x1:560,z0:62,z1:200,gate:'S',gpos:500,entry:[500,125],lawns:[[470,100,20,60],[530,100,20,60],[500,186,100,14]]});
   const L=new Loc(500,150,Math.PI);
@@ -953,6 +883,7 @@ function buildMosque(){
   const wp=L.w(0,0);landmarkBuildings.push({name:'mosque',x:wp[0],z:wp[1],hx:24,hz:17,c:L.c,s:L.s});
   Y.plant({scatter:26,step:14});
 }
+
 function buildChurch(){
   const cx=HILL.x,cz=HILL.z,F=FAC.tuff,R=HILL.rx1-HILL.rx0;
   disc(M.pave,cx,cz,0.01,HILL.r+1,0.12,6);
@@ -977,7 +908,7 @@ function buildChurch(){
     if(x<cx&&Math.abs(z-cz)<20)continue;addTree(x+rr(-2,2),z+rr(-2,2),rr(1,1.5),0);}
 }
 
-/* ═══ 14. Ֆոն ═══ */
+/* ═══ 14. Ֆոնային շենքեր ═══ */
 function clearOfRoads(x,z,hx,hz,margin){
   const pts=[[0,0],[hx,hz],[-hx,hz],[hx,-hz],[-hx,-hz],[hx,0],[-hx,0],[0,hz],[0,-hz]];
   for(const[p,q]of pts)if(roadDist(x+p,z+q)<margin)return false;
@@ -1039,7 +970,6 @@ function streetTrees(){
   for(let i=0;i<900;i++){
     const x=rr(-640,640),z=rr(-540,560);
     if(roadDist(x,z)<16)continue;if(Math.hypot(x,z)<150)continue;
-    if(Math.abs(x)<CAS.half && z>=CAS.z0 && z<=CAS.z1)continue;
     if(terrainH(x,z)>8)continue;
     addTree(x,z,rr(.9,1.5));
   }
@@ -1070,9 +1000,8 @@ function buildWorld(){
   buildRoads();
   buildCurbs();
   buildClimb();
-  buildSquare();buildOpera();buildMatenadaran();buildGallery();
+  buildSquare();buildCascade();buildOpera();buildMatenadaran();buildGallery();
   buildMarriott();buildUniversity();buildAvenue();buildMosque();buildChurch();
-  buildCascade();
   placeFillers();
   streetTrees();
   const cm=new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:.92,depthWrite:false});
@@ -1086,11 +1015,12 @@ function buildWorld(){
   flushBatch();
 }
 
-/* ═══ 21. Կամերա ═══ */
+/* ═══ 21. Կամերա — պտտվող / ազատ ═══ */
 const cam={
-  yaw:0.45, pitch:0.36, dist:900,
-  target:new THREE.Vector3(0,50,400),
-  drag:false, pid:null, lx:0, ly:0, rmb:false
+  yaw:0.5, pitch:0.42, dist:600,
+  target:new THREE.Vector3(0,40,400),
+  drag:false, pid:null, lx:0, ly:0,
+  rmb:false
 };
 function updateCam(){
   cam.pitch=clamp(cam.pitch,-0.05,1.4);
@@ -1130,7 +1060,7 @@ canvas.addEventListener('pointercancel',endDrag);
 canvas.addEventListener('contextmenu',e=>e.preventDefault());
 canvas.addEventListener('wheel',e=>{
   e.preventDefault();
-  cam.dist=clamp(cam.dist*Math.exp(e.deltaY*0.001),60,3500);
+  cam.dist=clamp(cam.dist*Math.exp(e.deltaY*0.001),60,2500);
 },{passive:false});
 addEventListener('resize',()=>{
   renderer.setPixelRatio(pixScale);
@@ -1145,11 +1075,13 @@ function frame(t){
   requestAnimationFrame(frame);
   const now=t/1000;const dt=Math.min(0.05,now-last||0.016);last=now;
   updateCam();
+  // ⭐ Ստվերը snap-վում է shadow texel-ի չափով
   const texelSize=240/2048;
   const sx=Math.round(cam.target.x/texelSize)*texelSize;
   const sz=Math.round(cam.target.z/texelSize)*texelSize;
   sun.target.position.set(sx,0,sz);
   sun.position.set(sx-300,480,sz+210);
+  for(const j of jets){const u=j.userData;j.scale.set(1,u.h*(0.75+0.25*Math.sin(now*3+u.ph)),1);}
   renderer.render(scene,camera);
   ema+=(dt*1000-ema)*0.05;adaptT+=dt;
   if(adaptT>2.5){adaptT=0;if(ema>24&&pixScale>0.6){pixScale=Math.max(0.6,pixScale-0.15);renderer.setPixelRatio(pixScale);renderer.setSize(innerWidth,innerHeight,false);}}
@@ -1169,4 +1101,4 @@ function start(){
 setTimeout(start,30);
 </script>
 </body>
-  </html>
+</html>
